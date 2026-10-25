@@ -76,29 +76,61 @@ $('taskForm').onsubmit=async e=>{
 $('quickForm').onsubmit=async e=>{e.preventDefault();if(busy||!currentUser)return;const name=$('quickName').value.trim();if(!name)return;setBusy(true);const {error}=await db.from('planner_tasks').insert({user_id:currentUser.id,name,category:'Personal',priority:'Medium',status:'Pending'});setBusy(false);if(error){alert(errorText(error));return;}$('quickName').value='';await loadTasks();};
 $('search').addEventListener('input',render);
 $('resetHabits').onclick=()=>{if(!confirm('Reset this week’s habit check-ins?'))return;habits.forEach(h=>h.days=[0,0,0,0,0,0,0]);storageSet('planner_habits_'+currentUser.id,JSON.stringify(habits));render();};
+// Notes are cached per user immediately and synced to Supabase.
+// The local cache protects drafts if the user refreshes or loses connection.
 async function loadNotes(){
  if(!currentUser)return;
  const uid=currentUser.id, serial=++notesLoadCounter;
- notesLoaded=false; $('notes').disabled=true; $('notesStatus').textContent='Loading notes...';
+ notesLoaded=false;
+ const cacheKey='planner_notes_'+uid;
+ const cached=storageGet(cacheKey);
+ $('notes').value=cached||'';
+ $('notes').disabled=true;
+ $('notesStatus').textContent='Loading notes...';
  const {data,error}=await db.from('planner_notes').select('content').eq('user_id',uid).maybeSingle();
  if(serial!==notesLoadCounter||currentUser?.id!==uid)return;
- if(error){$('notesStatus').textContent='Notes not connected — run notes_database.sql in Supabase.';return;}
- $('notes').value=data?.content||'';notesLoaded=true;$('notes').disabled=false;
- $('notesStatus').textContent='Notes synced to your account ✓';
+ if(error){
+  // Allow offline drafts, but never claim they are cloud-synced.
+  notesLoaded=true;$('notes').disabled=false;
+  $('notesStatus').textContent='Cloud unavailable. Notes saved on this browser only: '+errorText(error);
+  return;
+ }
+ if(data){
+  $('notes').value=data.content||'';
+  storageSet(cacheKey,$('notes').value);
+ }else if(cached){
+  // Migrate notes from earlier local-only versions when a cloud note does not exist.
+  $('notes').value=cached;
+ }
+ notesLoaded=true;
+ $('notes').disabled=false;
+ if(!data&&cached){
+  $('notesStatus').textContent='Syncing your previous note...';
+  await saveNotes(uid,cached);
+ }else{
+  $('notesStatus').textContent='Notes ready ✓';
+ }
 }
 async function saveNotes(uid,value){
- if(currentUser?.id!==uid||!notesLoaded)return;
- $('notesStatus').textContent='Saving...';
+ if(currentUser?.id!==uid)return;
+ storageSet('planner_notes_'+uid,value);
+ $('notesStatus').textContent='Saving to cloud...';
  const {error}=await db.from('planner_notes').upsert({user_id:uid,content:value,updated_at:new Date().toISOString()},{onConflict:'user_id'});
  if(currentUser?.id!==uid)return;
- $('notesStatus').textContent=error?'Could not save note: '+errorText(error):'Saved to your account ✓';
+ $('notesStatus').textContent=error?'Saved on this browser only — cloud error: '+errorText(error):'Saved to your account ✓';
 }
 $('notes').addEventListener('input',()=>{
  if(!currentUser||!notesLoaded)return;
  const uid=currentUser.id, value=$('notes').value;
+ storageSet('planner_notes_'+uid,value);
  clearTimeout(notesSaveTimer);
  $('notesStatus').textContent='Unsaved changes...';
- notesSaveTimer=setTimeout(()=>saveNotes(uid,value),700);
+ notesSaveTimer=setTimeout(()=>saveNotes(uid,value),500);
+});
+$('notes').addEventListener('blur',()=>{
+ if(!currentUser||!notesLoaded||!notesSaveTimer)return;
+ clearTimeout(notesSaveTimer);notesSaveTimer=null;
+ saveNotes(currentUser.id,$('notes').value);
 });
 const now=new Date();$('todayDate').textContent=now.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'short',year:'numeric'});const hour=now.getHours();$('greeting').textContent=hour<12?'Good Morning! ☁️':hour<18?'Good Day! ☁️':'Good Evening! 🌙';
 document.querySelectorAll('.nav button').forEach(button=>button.onclick=()=>{
@@ -110,6 +142,7 @@ document.querySelectorAll('.nav button').forEach(button=>button.onclick=()=>{
  render();
 });
 function applyUser(user){
+ clearTimeout(notesSaveTimer);notesSaveTimer=null;notesLoadCounter++;
  loadCounter++;
  currentUser=user;
  $('authScreen').style.display=user?'none':'grid';
@@ -119,9 +152,9 @@ function applyUser(user){
    const saved=storageGet('planner_habits_'+user.id);
    if(saved){try{const old=JSON.parse(saved);if(Array.isArray(old)&&old.length===habits.length)old.forEach((h,i)=>{if(Array.isArray(h.days))habits[i].days=h.days.map(v=>v?1:0).slice(0,7);});}catch{}}
    else habits.forEach(h=>h.days=[0,0,0,0,0,0,0]);
-   $('notes').value=storageGet('planner_notes_'+user.id)||'';
+   loadNotes();
    loadTasks();
- }else{$('notes').value='';habits.forEach(h=>h.days=[0,0,0,0,0,0,0]);$('statusNote').textContent='';}
+ }else{$('notes').value='';$('notes').disabled=true;$('notesStatus').textContent='Sign in to view your notes.';habits.forEach(h=>h.days=[0,0,0,0,0,0,0]);$('statusNote').textContent='';}
 }
 function setAuthMode(mode){
  authMode=mode; signingUp=mode==='signup'; notify('');
