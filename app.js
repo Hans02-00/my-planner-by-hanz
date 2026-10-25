@@ -37,23 +37,28 @@ async function loadTasks() {
 function render() {
  const q=$('search').value.trim().toLowerCase();
  let visible=tasks.filter(t=>t.name.toLowerCase().includes(q)||t.cat.toLowerCase().includes(q));
- if(currentView==='Archive')visible=visible.filter(t=>t.status==='Completed');
+ visible=visible.filter(t => currentView==='Archive' ? t.status==='Completed' : t.status!=='Completed');
  const done=tasks.filter(t=>t.status==='Completed').length,progress=tasks.filter(t=>t.status==='In Progress').length,pending=tasks.filter(t=>t.status==='Pending').length;
  $('total').textContent=tasks.length;$('completed').textContent=done;$('inprogress').textContent=progress;$('pending').textContent=pending;
  $('percent').textContent=(tasks.length?Math.round(done/tasks.length*100):0)+'%';
  $('donut').style.setProperty('--pct',(tasks.length?done/tasks.length*100:0)+'%');
  $('legDone').textContent=done;$('legProgress').textContent=progress;$('legPending').textContent=pending;$('legTotal').textContent=tasks.length;
+ $('taskSectionTitle').textContent=currentView==='Archive'?'▣ Completed Archive':'🗓 Active Tasks';
  $('taskList').innerHTML=visible.length?visible.map(t=>`<div class="taskrow ${t.status==='Completed'?'done':''}">
-  <input type="checkbox" aria-label="Mark completed" ${t.status==='Completed'?'checked':''} onchange="toggleTask('${t.id}',this.checked)">
+  ${currentView==='Archive'?'<span class="archive-check" aria-hidden="true">✓</span>':`<input type="checkbox" aria-label="Mark completed" onchange="toggleTask('${t.id}',this.checked)">`}
   <div><div class="taskname">${esc(t.name)}</div><div class="muted">${t.priority==='High'?'🔴 ':t.priority==='Low'?'🟢 ':'🟡 '}${esc(t.priority)} priority · ${esc(t.status)}</div></div>
   <span class="pill ${esc(t.cat)}">${esc(t.cat)}</span>
-  <span class="task-actions"><button class="delete" type="button" aria-label="Edit task" title="Edit" onclick="editTask('${t.id}')">✎</button><button class="delete" type="button" aria-label="Delete task" title="Delete" onclick="deleteTask('${t.id}')">×</button></span></div>`).join(''):'<div class="empty">No tasks yet ☁️<br>Add your first task!</div>';
+  <span class="task-actions">${currentView==='Archive'
+    ? `<button class="restore-btn" type="button" aria-label="Restore task" title="Restore to Tasks" onclick="restoreTask('${t.id}')">↶</button>`
+    : `<button class="delete" type="button" aria-label="Edit task" title="Edit" onclick="editTask('${t.id}')">✎</button>`}
+    <button class="delete" type="button" aria-label="Delete task" title="Delete" onclick="deleteTask('${t.id}')">×</button></span></div>`).join(''):(currentView==='Archive'?'<div class="empty">Your archive is empty ☁️<br>Completed tasks will appear here.</div>':'<div class="empty">No active tasks ☁️<br>Add a task to get started!</div>');
  const upcoming=tasks.filter(t=>t.date&&t.status!=='Completed').sort((a,b)=>a.date.localeCompare(b.date));
  $('deadlines').innerHTML=upcoming.length?upcoming.slice(0,5).map(t=>`<div class="deadline"><span>${esc(t.name)}<br><small class="muted">${esc(t.cat)}</small></span><span class="due">${dateText(t.date)}</span></div>`).join(''):'<div class="empty">No deadlines yet.</div>';
  $('habits').innerHTML=habits.map((h,i)=>`<div class="habit"><span>${esc(h.name)}</span><div class="week">${h.days.map((v,j)=>`<button class="day ${v?'on':''}" type="button" onclick="toggleHabit(${i},${j})">${'MTWTFSS'[j]}</button>`).join('')}</div></div>`).join('');
 }
 window.editTask=id=>{const t=isOwnTask(id);if(!t)return; resetForm(); $('taskName').value=t.name;$('taskCat').value=t.cat;$('taskDate').value=t.date;$('taskPriority').value=t.priority;$('taskStatus').value=t.status;$('taskForm').dataset.editId=id;$('taskForm').querySelector('h2').textContent='✎ Edit Task';$('taskForm').querySelector('[type="submit"]').textContent='Save Changes';$('modal').classList.add('open');$('taskName').focus();};
 window.toggleTask=async(id,checked)=>{const t=isOwnTask(id);if(!t||busy)return;setBusy(true);const {error}=await db.from('planner_tasks').update({status:checked?'Completed':'Pending'}).eq('id',id).eq('user_id',currentUser.id);setBusy(false);if(error){alert(errorText(error));render();return;}await loadTasks();};
+window.restoreTask=async id=>{const t=isOwnTask(id);if(!t||t.status!=='Completed'||busy||!currentUser)return;setBusy(true);const {error}=await db.from('planner_tasks').update({status:'Pending'}).eq('id',id).eq('user_id',currentUser.id);setBusy(false);if(error){alert('Could not restore task: '+errorText(error));return;}await loadTasks();};
 window.deleteTask=async id=>{if(!isOwnTask(id)||busy||!confirm('Delete this task?'))return;setBusy(true);const {error}=await db.from('planner_tasks').delete().eq('id',id).eq('user_id',currentUser.id);setBusy(false);if(error){alert(errorText(error));return;}await loadTasks();};
 window.toggleHabit=(i,j)=>{habits[i].days[j]=habits[i].days[j]?0:1;storageSet('planner_habits_'+currentUser.id,JSON.stringify(habits));render();};
 $('openAdd').onclick=openModal; $('cancel').onclick=closeModal; $('modal').onclick=e=>{if(e.target===$('modal'))closeModal();};
